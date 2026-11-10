@@ -1,4 +1,4 @@
-use crate::Gamma;
+use crate::{ColorControl, Gamma};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::{
@@ -9,21 +9,66 @@ use std::{
 
 pub const MAX_FILE_SIZE: usize = 4 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "WireProject")]
 pub struct Project {
     pub format_version: u32,
     pub name: String,
     pub source: String,
     pub baseline: Gamma,
     pub current: Gamma,
+    pub baseline_color: ColorControl,
+    pub current_color: ColorControl,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireProject {
+    format_version: u32,
+    name: String,
+    source: String,
+    baseline: Gamma,
+    current: Gamma,
+    baseline_color: Option<ColorControl>,
+    current_color: Option<ColorControl>,
+}
+impl TryFrom<WireProject> for Project {
+    type Error = String;
+    fn try_from(wire: WireProject) -> Result<Self, String> {
+        let (baseline_color, current_color) =
+            match (wire.format_version, wire.baseline_color, wire.current_color) {
+                (1, None, None) => (ColorControl::neutral(), ColorControl::neutral()),
+                (2, Some(baseline), Some(current)) => (baseline, current),
+                (1 | 2, _, _) => {
+                    return Err(
+                        "方案颜色字段不完整；格式 2 需要 baseline_color 和 current_color".into(),
+                    );
+                }
+                (version, _, _) => {
+                    return Err(format!("不支持的方案版本 {version}，支持格式 1 和 2"));
+                }
+            };
+        let project = Self {
+            format_version: 2,
+            name: wire.name,
+            source: wire.source,
+            baseline: wire.baseline,
+            current: wire.current,
+            baseline_color,
+            current_color,
+        };
+        project.validate()?;
+        Ok(project)
+    }
 }
 impl Project {
     pub fn dc162() -> Self {
-        Self::from_gamma(
+        let mut project = Self::from_gamma(
             Gamma::dc162(),
-            "DC162 · 原始 Gamma".into(),
-            "DC162 panel.c · 2026-11-10 快照".into(),
-        )
+            "DC162 · 调屏参考".into(),
+            "DC162 Gamma 快照 · 颜色控制采用用户提供参数".into(),
+        );
+        project.baseline_color = ColorControl::reference();
+        project.current_color = ColorControl::reference();
+        project
     }
     pub fn identity() -> Self {
         Self::from_gamma(
@@ -34,12 +79,20 @@ impl Project {
     }
     pub fn from_gamma(gamma: Gamma, name: String, source: String) -> Self {
         Self {
-            format_version: 1,
+            format_version: 2,
             name,
             source,
             baseline: gamma.clone(),
             current: gamma,
+            baseline_color: ColorControl::neutral(),
+            current_color: ColorControl::neutral(),
         }
+    }
+    pub fn baseline_rgb(&self, rgb: [u8; 3]) -> [u8; 3] {
+        self.baseline_color.apply(self.baseline.apply(rgb))
+    }
+    pub fn current_rgb(&self, rgb: [u8; 3]) -> [u8; 3] {
+        self.current_color.apply(self.current.apply(rgb))
     }
     pub fn from_json(source: &str) -> Result<Self, String> {
         if source.len() > MAX_FILE_SIZE {
@@ -57,9 +110,9 @@ impl Project {
             .map_err(|e| e.to_string())
     }
     fn validate(&self) -> Result<(), String> {
-        if self.format_version != 1 {
+        if self.format_version != 2 {
             return Err(format!(
-                "不支持的方案版本 {}，当前支持版本 1",
+                "不支持的方案版本 {}，保存使用格式 2",
                 self.format_version
             ));
         }
@@ -94,15 +147,21 @@ pub fn load_project(path: &Path) -> Result<Project, String> {
         .as_str()
     {
         "json" => Project::from_json(source),
-        "c" | "h" => Ok(Project::from_gamma(
-            crate::c_format::import_c(source)?,
-            path.file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
-            path.display().to_string(),
-        )),
-        _ => Err("请选择 JSON 方案或包含 gamma_config 定义的 C/H 文件".into()),
+        "c" | "h" => {
+            let (gamma, color) = crate::c_format::import_config(source)?;
+            let mut project = Project::from_gamma(
+                gamma,
+                path.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                path.display().to_string(),
+            );
+            project.baseline_color = color;
+            project.current_color = color;
+            Ok(project)
+        }
+        _ => Err("请选择 JSON 方案或包含 Gamma / 颜色控制定义的 C/H 文件".into()),
     }
 }
 

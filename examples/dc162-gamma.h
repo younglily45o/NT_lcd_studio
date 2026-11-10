@@ -27,3 +27,12 @@ static gamma_t gamma_config = {
         0xFF, 
     },
 };
+
+/* SDK display.h cc_t. Offsets are signed INT8. Preview is approximate. */
+static cc_t color_control_config = {
+    .enable = 1,
+    .sat_ofs = 10,
+    .int_ofs = 0,
+    .ycon = 128,
+    .ccon = 135
+};

@@ -1,4 +1,4 @@
-use lcd_studio::{Project, c_format::export_c, project::save_atomic};
+use lcd_studio::{Project, c_format::export_config, project::save_atomic};
 use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     save_atomic(
         &root.join("dc162-gamma.h"),
-        export_c(&dc162.current).as_bytes(),
+        export_config(&dc162.current, &dc162.current_color).as_bytes(),
     )?;
     println!(
         "Generated example JSON and C configuration in {}",

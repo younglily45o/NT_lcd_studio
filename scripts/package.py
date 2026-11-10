@@ -19,7 +19,7 @@ shutil.copyfile(binary, out / binary.name)
 shutil.copyfile(root / "README.md", out / "README.md")
 shutil.copyfile(root / "assets/FONT-LICENSE.txt", out / "FONT-LICENSE.txt")
 (out / "examples").mkdir()
-for name in ["dc162.json", "linear.json", "blue-lift.json", "dc162-gamma.h"]:
+for name in ["dc162.json", "linear.json", "blue-lift.json", "dc162-gamma.h", "color-control.h"]:
     shutil.copyfile(root / "examples" / name, out / "examples" / name)
 checksums = []
 for file in sorted(out.rglob("*")):

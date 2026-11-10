@@ -10,6 +10,19 @@ use std::{
 
 struct TestDir(PathBuf);
 #[test]
+fn json_color_fields_are_loaded_and_preserved() {
+    let mut value = serde_json::to_value(Project::identity()).unwrap();
+    value["format_version"] = 2.into();
+    value["baseline_color"] =
+        serde_json::json!({"enabled":true,"sat_ofs":0,"int_ofs":0,"ycon":128,"ccon":128});
+    value["current_color"] =
+        serde_json::json!({"enabled":true,"sat_ofs":-20,"int_ofs":17,"ycon":110,"ccon":135});
+    let parsed = Project::from_json(&value.to_string()).expect("color controls must load");
+    let result: serde_json::Value = serde_json::from_str(&parsed.to_json().unwrap()).unwrap();
+    assert_eq!(result["current_color"], value["current_color"]);
+    assert_ne!(result["baseline_color"], result["current_color"]);
+}
+#[test]
 fn c_import_rejects_ambiguous_leading_zero_literals() {
     let source = export_c(&Gamma::identity());
     for number in ["010", "08", "00"] {
@@ -73,9 +86,9 @@ fn json_rejects_unknown_versions_invalid_lengths_and_values() {
     let project = Project::dc162();
     let good = project.to_json().unwrap();
     let mut value: serde_json::Value = serde_json::from_str(&good).unwrap();
-    value["format_version"] = 2.into();
+    value["format_version"] = 99.into();
     assert!(Project::from_json(&value.to_string()).is_err());
-    value["format_version"] = 1.into();
+    value["format_version"] = 2.into();
     value["current"]["blue"] = serde_json::json!([0, 1]);
     assert!(Project::from_json(&value.to_string()).is_err());
     for bad in [

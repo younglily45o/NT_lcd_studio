@@ -1,7 +1,7 @@
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use lcd_studio::{
-    Gamma, Project,
-    c_format::export_c,
+    ColorControl, Gamma, Project,
+    c_format::export_config,
     gamma::input_position,
     history::History,
     pattern::{self, PatternRow, SampleRange},
@@ -74,7 +74,7 @@ impl Studio {
             steps: 16,
             range: SampleRange::Full,
             sample: [128; 3],
-            status: "已载入 DC162 Gamma 快照。拖动曲线或修改数值，观察下方色阶变化。".into(),
+            status: "已载入调屏参考。调整颜色控制或 Gamma，观察基准与当前色阶。".into(),
             error: false,
             active_edit: None,
             transaction_owner: None,
@@ -116,11 +116,15 @@ impl Studio {
             ui.add_space(7.0);
             ui.horizontal_wrapped(|ui| {
                 ui.heading("LCD Studio");
-                ui.label(RichText::new("电脑预览 / RGB 33 点").small().color(MUTED));
+                ui.label(
+                    RichText::new("离线预览 / 颜色控制 + Gamma")
+                        .small()
+                        .color(MUTED),
+                );
                 ui.separator();
                 if ui
                     .button("打开")
-                    .on_hover_text("JSON 方案或含 gamma_config 的 C/H 文件 · Ctrl+O")
+                    .on_hover_text("JSON 方案或含 Gamma / 颜色控制的 C/H 文件 · Ctrl+O")
                     .clicked()
                 {
                     actions.push(Action::Open);
@@ -197,20 +201,21 @@ impl Studio {
         });
         if self.about {
             egui::Window::new("使用说明").open(&mut self.about).default_width(620.0).show(ctx,|ui|{
-                ui.heading("用色阶观察 Gamma 的变化");
+                ui.heading("用色阶观察颜色参数的变化");
+                ui.label("颜色控制包含 enable、sat_ofs、int_ofs、ycon、ccon；两个 ofs 为 -128~127，两个 con 为 0~255。128 为中性对比度/色度增益。");
                 ui.label("1. 选择 R / G / B。修改 33 点数值，或拖动曲线控制点；勾选联动可同时修改三路。");
                 ui.label("2. 曲线指数小于 1 提亮中间调，大于 1 压暗。生成器每次重算所选通道，不累计上一次的效果。");
                 ui.label("3. 上方是固定基准，下方是当前结果。可观察灰阶偏色、暗部合并、高光截断和不平滑的位置。");
                 ui.label("4. 切换暗部 / 高光及分级，只改变测试图。指向色块可以查看原始和映射后的 RGB 数值。");
-                ui.label("5. 保存 JSON 保留基准和当前配置；导出 C 用于替换 SDK 中已有的 gamma_config 定义。");
+                ui.label("5. 保存 JSON 保留两组 Gamma 和颜色参数；导出 C 同时包含 gamma_config 与 color_control_config，按 SDK 显示初始化流程接入。");
                 ui.separator();
                 ui.label("电脑预览使用 0、8、16……248、255 共 33 个输入点，线性插值到 256 级。输出编码值还会经过电脑的显示链，实际 LCD 色彩需要上板确认。");
-                ui.label("DC162 内置数据是 2026-11-10 的 ST7701S panel.c 快照。C 导入支持单个明确的 gamma_config 定义，遇到多份定义或初始化内部的条件编译、宏运算会报错。");
-                ui.separator();ui.small("LCD Studio 0.1.0 · Rust / egui · 字体 Noto Sans CJK / SIL OFL");
+                ui.label("Gamma 来自 DC162 源码快照；参考颜色控制采用你提供的 1/10/0/128/135。颜色预览采用亮度与色差的近似模型，不复现 IDE 寄存器内部算法。C 导入支持单个明确的 Gamma/CC 定义，拒绝多定义、内部条件编译和宏运算。");
+                ui.separator();ui.small(concat!("LCD Studio ", env!("CARGO_PKG_VERSION"), " · 离线预览 · 字体 Noto Sans CJK / SIL OFL"));
             });
         }
         if self.code_preview {
-            let mut code = export_c(&self.project.current);
+            let mut code = export_config(&self.project.current, &self.project.current_color);
             egui::Window::new("当前 C 配置")
                 .open(&mut self.code_preview)
                 .default_width(740.0)
@@ -262,6 +267,9 @@ impl Studio {
             }
         });
         ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(7.0);
+        self.color_editor(ui);
         ui.separator();
         ui.add_space(7.0);
         ui.heading("Gamma 调整");
@@ -450,19 +458,94 @@ impl Studio {
         ui.add_space(6.0);
         ui.separator();
         ui.add_space(5.0);
-        ui.strong("色阶检查");
+        ui.strong("Gamma 色阶检查");
         for (c, stats) in self.project.current.stats().iter().enumerate() {
             ui.label(RichText::new(format!("{}  逆转 {} · 相邻同值 {}",NAMES[c],stats.reversals,stats.merged_levels)).small().color(if stats.reversals>0{Color32::from_rgb(241,178,127)}else{RGB_COLORS[c]}))
                 .on_hover_text(format!("在 256 项输出中，{} 处下降、{} 组相邻输入输出相同。输出为 0：{} 项；输出为 255：{} 项。",stats.reversals,stats.merged_levels,stats.clipped_low,stats.clipped_high));
         }
         if !self.project.current.enabled {
             ui.label(
-                RichText::new("Gamma 已旁路，预览显示输入原值")
+                RichText::new("Gamma 已旁路；颜色控制仍按启用状态计算")
                     .small()
                     .color(ACCENT),
             );
         }
         ui.add_space(12.0);
+    }
+
+    fn color_editor(&mut self, ui: &mut egui::Ui) {
+        ui.heading("颜色控制");
+        let mut enabled = self.project.current_color.enabled;
+        if ui
+            .checkbox(&mut enabled, "启用颜色控制（enable）")
+            .changed()
+        {
+            self.begin_edit(egui::Id::new("color_enable"));
+            self.project.current_color.enabled = enabled;
+        }
+        ui.add_enabled_ui(enabled, |ui| {
+            let color = self.project.current_color;
+            let mut values = [
+                i16::from(color.sat_ofs),
+                i16::from(color.int_ofs),
+                i16::from(color.ycon),
+                i16::from(color.ccon),
+            ];
+            for (index, (name, help)) in [
+                ("sat_ofs", "饱和度偏移，-128~127；0 为中性。软件近似。"),
+                ("int_ofs", "亮度偏移，-128~127；0 为中性。软件近似。"),
+                ("ycon", "亮度对比度，0~255；128 为中性。软件近似。"),
+                ("ccon", "色度增益，0~255；128 为中性。软件近似。"),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let range = if index < 2 { -128..=127 } else { 0..=255 };
+                let owner = egui::Id::new(("color_control", index));
+                let (slider, value) = ui
+                    .push_id(("color_field", index), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().slider_width =
+                                (ui.available_width() - 125.0).clamp(60.0, 155.0);
+                            ui.add_sized([58.0, 20.0], egui::Label::new(*name))
+                                .on_hover_text(*help);
+                            let slider = ui.add(
+                                egui::Slider::new(&mut values[index], range.clone())
+                                    .show_value(false),
+                            );
+                            let value = ui.add(
+                                egui::DragValue::new(&mut values[index])
+                                    .range(range)
+                                    .speed(1.0),
+                            );
+                            (slider, value)
+                        })
+                        .inner
+                    })
+                    .inner;
+                self.track_response(&slider, owner);
+                self.track_response(&value, owner);
+                if slider.changed() || value.changed() {
+                    self.begin_edit(owner);
+                    match index {
+                        0 => self.project.current_color.sat_ofs = values[index] as i8,
+                        1 => self.project.current_color.int_ofs = values[index] as i8,
+                        2 => self.project.current_color.ycon = values[index] as u8,
+                        _ => self.project.current_color.ccon = values[index] as u8,
+                    }
+                }
+            }
+        });
+        if ui.small_button("颜色恢复中性").clicked() {
+            self.begin_edit(egui::Id::new("color_neutral"));
+            self.project.current_color = ColorControl::neutral();
+        }
+        ui.label(
+            RichText::new("颜色控制为软件近似；以实屏验证为准")
+                .small()
+                .color(MUTED),
+        );
+        ui.add_space(7.0);
     }
 
     fn set_point(&mut self, value: u8) {
@@ -504,14 +587,14 @@ impl Studio {
         ui.add_space(10.0);
         let baseline = self.project.baseline.lut();
         let current = self.project.current.lut();
-        self.ramps(ui, "基准", &baseline, false);
+        self.ramps(ui, "基准", &baseline, self.project.baseline_color, false);
         ui.add_space(10.0);
-        self.ramps(ui, "当前调整", &current, true);
+        self.ramps(ui, "当前调整", &current, self.project.current_color, true);
         ui.add_space(12.0);
         self.curve(ui);
         ui.add_space(10.0);
-        let base = self.project.baseline.apply(self.sample);
-        let result = self.project.current.apply(self.sample);
+        let base = self.project.baseline_rgb(self.sample);
+        let result = self.project.current_rgb(self.sample);
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label("色块取样");
@@ -544,7 +627,14 @@ impl Studio {
         ui.add_space(12.0);
     }
 
-    fn ramps(&mut self, ui: &mut egui::Ui, title: &str, lut: &[[u8; 256]; 3], current: bool) {
+    fn ramps(
+        &mut self,
+        ui: &mut egui::Ui,
+        title: &str,
+        lut: &[[u8; 256]; 3],
+        color: ColorControl,
+        current: bool,
+    ) {
         egui::Frame::group(ui.style())
             .fill(Color32::from_rgb(20, 22, 24))
             .show(ui, |ui| {
@@ -580,11 +670,12 @@ impl Studio {
                                 self.steps,
                                 self.range,
                             );
-                            let color = Color32::from_rgb(
+                            let output = color.apply([
                                 lut[0][usize::from(input[0])],
                                 lut[1][usize::from(input[1])],
                                 lut[2][usize::from(input[2])],
-                            );
+                            ]);
+                            let color = Color32::from_rgb(output[0], output[1], output[2]);
                             let gap = if count <= 32 { 0.6 } else { 0.0 };
                             let cell = Rect::from_min_max(
                                 Pos2::new(
@@ -771,9 +862,9 @@ impl Studio {
     fn save(&mut self, force_path: bool) -> bool {
         let path = if force_path || self.path.is_none() {
             rfd::FileDialog::new()
-                .set_title("保存 Gamma 方案")
-                .set_file_name("lcd-gamma.json")
-                .add_filter("Gamma 方案", &["json"])
+                .set_title("保存 LCD 调屏方案")
+                .set_file_name("lcd-config.json")
+                .add_filter("LCD 方案", &["json"])
                 .save_file()
         } else {
             self.path.clone()
@@ -804,8 +895,8 @@ impl Studio {
         match action {
             Action::Open => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .set_title("打开 Gamma 方案或 C 配置")
-                    .add_filter("Gamma 配置", &["json", "c", "h"])
+                    .set_title("打开 LCD 方案或 C 配置")
+                    .add_filter("LCD 配置", &["json", "c", "h"])
                     .pick_file()
                 {
                     self.open_path(&path);
@@ -819,15 +910,19 @@ impl Studio {
             }
             Action::Export => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .set_title("导出 SDK Gamma 定义")
-                    .set_file_name("lcd-gamma.h")
+                    .set_title("导出 SDK Gamma 与颜色控制")
+                    .set_file_name("lcd-config.h")
                     .add_filter("C 配置", &["h", "c"])
                     .save_file()
                 {
-                    match save_atomic(&path, export_c(&self.project.current).as_bytes()) {
+                    match save_atomic(
+                        &path,
+                        export_config(&self.project.current, &self.project.current_color)
+                            .as_bytes(),
+                    ) {
                         Ok(()) => self.set_status(
                             format!(
-                                "已导出 {}；将 Gamma 定义应用到 SDK 后验证实屏",
+                                "已导出 {}；包含 Gamma 与颜色控制，请按 SDK 显示初始化流程接入",
                                 path.display()
                             ),
                             false,
@@ -866,11 +961,13 @@ impl Studio {
                 match action {
                     Action::Restore => {
                         self.project.current = self.project.baseline.clone();
+                        self.project.current_color = self.project.baseline_color;
                         self.reset_generator();
                         self.set_status("已恢复基准", false);
                     }
                     Action::SetBaseline => {
                         self.project.baseline = self.project.current.clone();
+                        self.project.baseline_color = self.project.current_color;
                         self.set_status("当前结果已设为新的固定基准", false);
                     }
                     Action::Linear => {
@@ -907,7 +1004,11 @@ impl Studio {
 
 impl eframe::App for Studio {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        for action in self.edit_frame(ctx) {
+        let actions = self.edit_frame(ctx);
+        if !actions.is_empty() {
+            ctx.request_repaint();
+        }
+        for action in actions {
             self.perform(action);
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
@@ -991,6 +1092,52 @@ fn keyboard_actions(ctx: &egui::Context) -> Vec<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn offline_toolbar_has_no_machine_connection_control() {
+        let ctx = egui::Context::default();
+        let mut app = Studio::new(&ctx);
+        frame(&mut app, &ctx, vec![]);
+        let output = frame(&mut app, &ctx, vec![]);
+        assert!(text_positions(&output, "USB 设备").is_empty());
+    }
+    #[test]
+    fn color_numeric_edit_changes_preview_and_is_one_undo_step() {
+        let ctx = egui::Context::default();
+        let mut app = Studio::new(&ctx);
+        frame(&mut app, &ctx, vec![]);
+        let output = frame(&mut app, &ctx, vec![]);
+        let before = app.project.clone();
+        let positions = text_positions(&output, "135");
+        assert!(!positions.is_empty(), "ccon control must be visible");
+        click(&mut app, &ctx, positions[0]);
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![egui::Event::Text("6".into())]);
+        frame(&mut app, &ctx, vec![egui::Event::Text("4".into())]);
+        assert_eq!(app.project.current_color.ccon, 64);
+        assert_ne!(
+            app.project.current_rgb([100, 40, 20]),
+            before.current_rgb([100, 40, 20])
+        );
+        assert!(app.dirty());
+        assert!(app.history.undo(&mut app.project));
+        assert_eq!(app.project, before);
+        assert!(!app.history.undo(&mut app.project));
+        assert!(app.history.redo(&mut app.project));
+        assert_eq!(app.project.current_color.ccon, 64);
+    }
+    #[test]
+    fn baseline_actions_include_color_controls() {
+        let ctx = egui::Context::default();
+        let mut app = Studio::new(&ctx);
+        let initial = app.project.current_color;
+        app.project.current_color.int_ofs = 25;
+        app.perform(Action::SetBaseline);
+        assert_eq!(app.project.baseline_color.int_ofs, 25);
+        app.history.undo(&mut app.project);
+        assert_eq!(app.project.baseline_color, initial);
+        app.perform(Action::Restore);
+        assert_eq!(app.project.current_color, initial);
+    }
     fn frame(app: &mut Studio, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
         ctx.run(
             egui::RawInput {

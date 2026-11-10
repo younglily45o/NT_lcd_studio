@@ -1,7 +1,7 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "name": "蓝通道中间调提亮示例",
-  "source": "DC162 panel.c · 2026-11-10 快照",
+  "source": "DC162 Gamma 快照 · 颜色控制采用用户提供参数",
   "baseline": {
     "enabled": true,
     "red": [
@@ -217,5 +217,19 @@
       249,
       255
     ]
+  },
+  "baseline_color": {
+    "enabled": true,
+    "sat_ofs": 10,
+    "int_ofs": 0,
+    "ycon": 128,
+    "ccon": 135
+  },
+  "current_color": {
+    "enabled": true,
+    "sat_ofs": 10,
+    "int_ofs": 0,
+    "ycon": 128,
+    "ccon": 135
   }
 }

@@ -1,5 +1,5 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "name": "线性 Gamma",
   "source": "软件线性曲线",
   "baseline": {
@@ -217,5 +217,19 @@
       248,
       255
     ]
+  },
+  "baseline_color": {
+    "enabled": true,
+    "sat_ofs": 0,
+    "int_ofs": 0,
+    "ycon": 128,
+    "ccon": 128
+  },
+  "current_color": {
+    "enabled": true,
+    "sat_ofs": 0,
+    "int_ofs": 0,
+    "ycon": 128,
+    "ccon": 128
   }
 }
