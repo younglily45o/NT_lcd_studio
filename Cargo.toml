@@ -1,0 +1,26 @@
+[package]
+name = "lcd-studio"
+version = "0.1.0"
+edition = "2024"
+description = "Native LCD Gamma editor and color-step preview"
+
+[features]
+default = ["desktop"]
+desktop = ["dep:eframe", "dep:rfd"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+eframe = { version = "=0.33.3", default-features = false, features = ["default_fonts", "glow", "x11"], optional = true }
+rfd = { version = "=0.15.4", default-features = false, features = ["xdg-portal", "async-std"], optional = true }
+
+[[bin]]
+name = "LCD-Studio"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = "debuginfo"
