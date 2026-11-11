@@ -7,3 +7,7 @@ pub mod project;
 pub use color_control::ColorControl;
 pub use gamma::Gamma;
 pub use project::Project;
+
+pub mod usb_device;
+pub mod usb_protocol;
+pub use usb_protocol::DeviceSettings;

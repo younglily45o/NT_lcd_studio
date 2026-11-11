@@ -1,4 +1,4 @@
-use crate::{ColorControl, Gamma};
+use crate::{ColorControl, DeviceSettings, Gamma};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::{
@@ -86,6 +86,23 @@ impl Project {
             current: gamma,
             baseline_color: ColorControl::neutral(),
             current_color: ColorControl::neutral(),
+        }
+    }
+    pub fn from_settings(settings: DeviceSettings, name: String, source: String) -> Self {
+        Self {
+            format_version: 2,
+            name,
+            source,
+            baseline: settings.gamma.clone(),
+            current: settings.gamma,
+            baseline_color: settings.color,
+            current_color: settings.color,
+        }
+    }
+    pub fn settings(&self) -> DeviceSettings {
+        DeviceSettings {
+            gamma: self.current.clone(),
+            color: self.current_color,
         }
     }
     pub fn baseline_rgb(&self, rgb: [u8; 3]) -> [u8; 3] {

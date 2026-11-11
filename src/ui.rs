@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use lcd_studio::{
-    ColorControl, Gamma, Project,
+    ColorControl, DeviceSettings, Gamma, Project,
     c_format::export_config,
     gamma::input_position,
     history::History,
@@ -54,6 +54,8 @@ pub struct Studio {
     about: bool,
     code_preview: bool,
     close_confirmed: bool,
+    device: crate::device_ui::DevicePanel,
+    device_import: Option<DeviceSettings>,
 }
 
 impl Studio {
@@ -81,6 +83,8 @@ impl Studio {
             about: false,
             code_preview: false,
             close_confirmed: false,
+            device: crate::device_ui::DevicePanel::default(),
+            device_import: None,
         }
     }
 
@@ -117,7 +121,7 @@ impl Studio {
             ui.horizontal_wrapped(|ui| {
                 ui.heading("LCD Studio");
                 ui.label(
-                    RichText::new("离线预览 / 颜色控制 + Gamma")
+                    RichText::new("颜色控制 + Gamma / V9 USB")
                         .small()
                         .color(MUTED),
                 );
@@ -169,6 +173,9 @@ impl Studio {
                 if ui.small_button("说明").clicked() {
                     self.about = true;
                 }
+                if ui.button(self.device.label()).clicked() {
+                    self.device.open = true;
+                }
                 if self.dirty() {
                     ui.label(RichText::new("● 未保存").color(ACCENT));
                 }
@@ -208,10 +215,11 @@ impl Studio {
                 ui.label("3. 上方是固定基准，下方是当前结果。可观察灰阶偏色、暗部合并、高光截断和不平滑的位置。");
                 ui.label("4. 切换暗部 / 高光及分级，只改变测试图。指向色块可以查看原始和映射后的 RGB 数值。");
                 ui.label("5. 保存 JSON 保留两组 Gamma 和颜色参数；导出 C 同时包含 gamma_config 与 color_control_config，按 SDK 显示初始化流程接入。");
+                ui.label("6. V9 USB：先升级 20261110.002 固件，连接后显式读取并接受载入本机完整参数，再手动下发或启用自动下发；所有值仅在本次运行有效。");
                 ui.separator();
                 ui.label("电脑预览使用 0、8、16……248、255 共 33 个输入点，线性插值到 256 级。输出编码值还会经过电脑的显示链，实际 LCD 色彩需要上板确认。");
                 ui.label("Gamma 来自 DC162 源码快照；参考颜色控制采用你提供的 1/10/0/128/135。颜色预览采用亮度与色差的近似模型，不复现 IDE 寄存器内部算法。C 导入支持单个明确的 Gamma/CC 定义，拒绝多定义、内部条件编译和宏运算。");
-                ui.separator();ui.small(concat!("LCD Studio ", env!("CARGO_PKG_VERSION"), " · 离线预览 · 字体 Noto Sans CJK / SIL OFL"));
+                ui.separator();ui.small(concat!("LCD Studio ", env!("CARGO_PKG_VERSION"), " · V9 USB CDC · 字体 Noto Sans CJK / SIL OFL"));
             });
         }
         if self.code_preview {
@@ -233,6 +241,7 @@ impl Studio {
                     });
                 });
         }
+        self.device_import = self.device.show(ctx, &self.project.settings());
     }
 
     fn editor(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
@@ -990,6 +999,16 @@ impl Studio {
 }
 
 impl Studio {
+    fn finish_device_import(&mut self, settings: DeviceSettings, accepted: bool) {
+        if accepted {
+            self.adopt(
+                Project::from_settings(settings, "V9 USB 调屏参数".into(), self.device.source()),
+                None,
+            );
+            self.set_status("已将机器 Gamma 和颜色控制载入编辑器并共同设为基准", false);
+        }
+        self.device.complete_import(accepted);
+    }
     fn edit_frame(&mut self, ctx: &egui::Context) -> Vec<Action> {
         let mut actions = keyboard_actions(ctx);
         self.active_edit = None;
@@ -1010,6 +1029,11 @@ impl eframe::App for Studio {
         }
         for action in actions {
             self.perform(action);
+        }
+        if let Some(settings) = self.device_import.take() {
+            let accepted = self.may_replace();
+            self.finish_device_import(settings, accepted);
+            ctx.request_repaint();
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         if let Some(path) = dropped.first().and_then(|f| f.path.as_ref()) {
@@ -1093,12 +1117,39 @@ fn keyboard_actions(ctx: &egui::Context) -> Vec<Action> {
 mod tests {
     use super::*;
     #[test]
-    fn offline_toolbar_has_no_machine_connection_control() {
+    fn toolbar_exposes_machine_connection_without_altering_offline_project() {
         let ctx = egui::Context::default();
         let mut app = Studio::new(&ctx);
         frame(&mut app, &ctx, vec![]);
         let output = frame(&mut app, &ctx, vec![]);
-        assert!(text_positions(&output, "USB 设备").is_empty());
+        assert!(!text_positions(&output, "USB 设备").is_empty());
+        assert_eq!(app.project, Project::dc162());
+    }
+    #[test]
+    fn accepted_machine_import_replaces_both_baselines_and_cancel_preserves_project() {
+        let ctx = egui::Context::default();
+        let mut app = Studio::new(&ctx);
+        app.project.current_color.int_ofs = 12;
+        let offline = app.project.clone();
+        let actual = DeviceSettings {
+            gamma: Gamma::identity(),
+            color: ColorControl {
+                sat_ofs: -15,
+                int_ofs: 7,
+                ycon: 111,
+                ccon: 144,
+                ..ColorControl::neutral()
+            },
+        };
+        app.finish_device_import(actual.clone(), false);
+        assert_eq!(app.project, offline);
+        app.finish_device_import(actual.clone(), true);
+        assert_eq!(app.project.current, actual.gamma);
+        assert_eq!(app.project.baseline, actual.gamma);
+        assert_eq!(app.project.current_color, actual.color);
+        assert_eq!(app.project.baseline_color, actual.color);
+        assert!(!app.dirty());
+        assert!(!app.history.can_undo());
     }
     #[test]
     fn color_numeric_edit_changes_preview_and_is_one_undo_step() {

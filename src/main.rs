@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod device_ui;
 mod ui;
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {

@@ -21,6 +21,10 @@ shutil.copyfile(root / "assets/FONT-LICENSE.txt", out / "FONT-LICENSE.txt")
 (out / "examples").mkdir()
 for name in ["dc162.json", "linear.json", "blue-lift.json", "dc162-gamma.h", "color-control.h"]:
     shutil.copyfile(root / "examples" / name, out / "examples" / name)
+(out / "usb").mkdir()
+(out / "usb/USBCDC").write_bytes(b"")
+(out / "docs").mkdir()
+shutil.copyfile(root / "docs/usb-protocol.md", out / "docs/usb-protocol.md")
 checksums = []
 for file in sorted(out.rglob("*")):
     if file.is_file():
