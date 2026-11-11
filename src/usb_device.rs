@@ -1,6 +1,6 @@
 use crate::{
     DeviceSettings,
-    usb_protocol::{DeviceModel, Session},
+    usb_protocol::{DeviceInfo, Session},
 };
 use std::{
     io::{Read, Write},
@@ -14,7 +14,7 @@ use std::{
 #[derive(Debug)]
 pub enum DeviceEvent {
     Opened,
-    Connected(DeviceModel, DeviceSettings),
+    Connected(DeviceInfo, DeviceSettings),
     Busy,
     Read(DeviceSettings),
     Applied(DeviceSettings),
@@ -29,33 +29,28 @@ pub enum Request {
 pub struct PortInfo {
     pub name: String,
     pub label: String,
-    pub preferred: bool,
 }
 pub fn available_ports() -> Result<Vec<PortInfo>, String> {
     let mut ports: Vec<_> = serialport::available_ports()
         .map_err(|e| format!("USB 端口枚举失败：{e}"))?
         .into_iter()
         .map(|port| {
-            let (description, preferred) = match port.port_type {
-                serialport::SerialPortType::UsbPort(info) => (
-                    format!(
-                        "USB {:04X}:{:04X} {}",
-                        info.vid,
-                        info.pid,
-                        info.product.unwrap_or_default()
-                    ),
-                    info.vid == 0x0603 && info.pid == 0x8613,
+            let description = match port.port_type {
+                serialport::SerialPortType::UsbPort(info) => format!(
+                    "USB {:04X}:{:04X} {}",
+                    info.vid,
+                    info.pid,
+                    info.product.unwrap_or_default()
                 ),
-                _ => ("可选端口，连接后验证设备身份".into(), false),
+                _ => "可选端口，连接后验证调屏协议".into(),
             };
             PortInfo {
                 label: format!("{} · {description}", port.port_name),
                 name: port.port_name,
-                preferred,
             }
         })
         .collect();
-    ports.sort_by(|a, b| b.preferred.cmp(&a.preferred).then(a.name.cmp(&b.name)));
+    ports.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(ports)
 }
 pub fn open_port(name: &str) -> Result<Box<dyn serialport::SerialPort>, String> {

@@ -1,6 +1,6 @@
 use lcd_studio::{
     ColorControl, DeviceSettings, Gamma,
-    usb_protocol::{DeviceModel, Session, crc32, encode_color, settings_crc},
+    usb_protocol::{DeviceInfo, Session, crc32, encode_color, settings_crc},
 };
 use std::{
     collections::VecDeque,
@@ -120,11 +120,12 @@ fn fragmented_get_ignores_logs_and_stale_sequence() {
     assert!(s.io.steps.is_empty());
 }
 #[test]
-fn wrong_device_or_protocol_cannot_enable_writes() {
+fn malformed_identity_or_unsupported_protocol_cannot_enable_writes() {
     for response in [
-        "@LCS2 00000010 hello OTHER 2\n",
-        "@LCS2 00000010 hello DC162 2\n",
+        "@LCS2 00000010 hello 2\n",
+        "@LCS2 00000010 hello BOARD 2 extra\n",
         "@LCS2 00000010 hello P618_V9 1\n",
+        "@LCS2 00000010 hello DC162 3\n",
         "@LCS1 00000010 hello P618_V9 1\n",
     ] {
         let mut s = session(vec![("key lcdiq 00000010 hello".into(), response.into())]);
@@ -134,12 +135,47 @@ fn wrong_device_or_protocol_cannot_enable_writes() {
     }
 }
 #[test]
+fn any_valid_model_identifier_can_handshake_and_read_full_settings() {
+    for model in ["P618_V9", "DC162", "NT98533_GENERIC", "FUTURE-BOARD.1"] {
+        let mut s = session(vec![
+            (
+                "key lcdiq 00000010 hello".into(),
+                format!("@LCS2 00000010 hello {model} 2\r\n"),
+            ),
+            ("key lcdiq 00000011 get".into(), identity_reply(17)),
+        ]);
+        assert_eq!(s.hello().unwrap().name(), model);
+        assert_eq!(s.read_settings().unwrap(), initial());
+        assert!(s.io.steps.is_empty());
+    }
+}
+#[test]
+fn unsafe_or_overlong_model_identifiers_never_unlock_a_transaction() {
+    for model in [
+        "bad/model".to_owned(),
+        "bad\0model".into(),
+        "坏机型".into(),
+        "A".repeat(33),
+    ] {
+        let mut s = session(vec![(
+            "key lcdiq 00000010 hello".into(),
+            format!("@LCS2 00000010 hello {model} 2\n"),
+        )]);
+        assert!(s.hello().is_err());
+        assert!(s.apply_settings(&initial()).is_err());
+        assert!(s.io.steps.is_empty());
+    }
+}
+#[test]
 fn p618_v9_v2_identity_allows_full_state_read() {
     let mut s = session(vec![
         hello(16),
         ("key lcdiq 00000011 get".into(), identity_reply(17)),
     ]);
-    assert_eq!(s.hello().unwrap(), DeviceModel::P618V9);
+    assert_eq!(
+        s.hello().unwrap(),
+        DeviceInfo::protocol_v2("P618_V9").unwrap()
+    );
     assert_eq!(s.read_settings().unwrap(), initial());
     assert!(s.io.steps.is_empty());
 }

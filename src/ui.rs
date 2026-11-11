@@ -61,7 +61,7 @@ pub struct Studio {
 impl Studio {
     pub fn new(ctx: &egui::Context) -> Self {
         setup_style(ctx);
-        let project = Project::dc162();
+        let project = Project::identity();
         Self {
             saved: project.clone(),
             project,
@@ -76,7 +76,7 @@ impl Studio {
             steps: 16,
             range: SampleRange::Full,
             sample: [128; 3],
-            status: "已载入调屏参考。调整颜色控制或 Gamma，观察基准与当前色阶。".into(),
+            status: "已载入线性 Gamma 和中性颜色参数。调整参数，观察基准与当前色阶。".into(),
             error: false,
             active_edit: None,
             transaction_owner: None,
@@ -121,7 +121,7 @@ impl Studio {
             ui.horizontal_wrapped(|ui| {
                 ui.heading("LCD Studio");
                 ui.label(
-                    RichText::new("颜色控制 + Gamma / V9 USB")
+                    RichText::new("颜色控制 + Gamma / USB 调屏")
                         .small()
                         .color(MUTED),
                 );
@@ -215,11 +215,11 @@ impl Studio {
                 ui.label("3. 上方是固定基准，下方是当前结果。可观察灰阶偏色、暗部合并、高光截断和不平滑的位置。");
                 ui.label("4. 切换暗部 / 高光及分级，只改变测试图。指向色块可以查看原始和映射后的 RGB 数值。");
                 ui.label("5. 保存 JSON 保留两组 Gamma 和颜色参数；导出 C 同时包含 gamma_config 与 color_control_config，按 SDK 显示初始化流程接入。");
-                ui.label("6. V9 USB：先升级 20261110.002 固件，连接后显式读取并接受载入本机完整参数，再手动下发或启用自动下发；所有值仅在本次运行有效。");
+                ui.label("6. USB 调屏：设备固件需实现 LCD Studio 协议 2。连接后读取并接受载入本机参数，再手动下发或启用自动下发；所有值仅在本次运行有效。");
                 ui.separator();
                 ui.label("电脑预览使用 0、8、16……248、255 共 33 个输入点，线性插值到 256 级。输出编码值还会经过电脑的显示链，实际 LCD 色彩需要上板确认。");
-                ui.label("Gamma 来自 DC162 源码快照；参考颜色控制采用你提供的 1/10/0/128/135。颜色预览采用亮度与色差的近似模型，不复现 IDE 寄存器内部算法。C 导入支持单个明确的 Gamma/CC 定义，拒绝多定义、内部条件编译和宏运算。");
-                ui.separator();ui.small(concat!("LCD Studio ", env!("CARGO_PKG_VERSION"), " · V9 USB CDC · 字体 Noto Sans CJK / SIL OFL"));
+                ui.label("默认使用线性 Gamma 和中性颜色参数；DC162 快照可手动载入作为参考。颜色预览采用亮度与色差的近似模型，不复现各芯片显示引擎的内部算法。C 导入支持单个明确的 Gamma/CC 定义，拒绝多定义、内部条件编译和宏运算。");
+                ui.separator();ui.small(concat!("LCD Studio ", env!("CARGO_PKG_VERSION"), " · 通用 USB CDC 调屏 · 字体 Noto Sans CJK / SIL OFL"));
             });
         }
         if self.code_preview {
@@ -1002,7 +1002,7 @@ impl Studio {
     fn finish_device_import(&mut self, settings: DeviceSettings, accepted: bool) {
         if accepted {
             self.adopt(
-                Project::from_settings(settings, "V9 USB 调屏参数".into(), self.device.source()),
+                Project::from_settings(settings, self.device.project_name(), self.device.source()),
                 None,
             );
             self.set_status("已将机器 Gamma 和颜色控制载入编辑器并共同设为基准", false);
@@ -1123,7 +1123,18 @@ mod tests {
         frame(&mut app, &ctx, vec![]);
         let output = frame(&mut app, &ctx, vec![]);
         assert!(!text_positions(&output, "USB 设备").is_empty());
+        assert_eq!(app.project, Project::identity());
+    }
+    #[test]
+    fn neutral_startup_keeps_dc162_available_only_as_an_explicit_preset() {
+        let ctx = egui::Context::default();
+        let mut app = Studio::new(&ctx);
+        assert_eq!(app.project.current, Gamma::identity());
+        assert_eq!(app.project.current_color, ColorControl::neutral());
+        app.perform(Action::Dc162);
         assert_eq!(app.project, Project::dc162());
+        app.perform(Action::Identity);
+        assert_eq!(app.project, Project::identity());
     }
     #[test]
     fn accepted_machine_import_replaces_both_baselines_and_cancel_preserves_project() {
@@ -1158,9 +1169,12 @@ mod tests {
         frame(&mut app, &ctx, vec![]);
         let output = frame(&mut app, &ctx, vec![]);
         let before = app.project.clone();
-        let positions = text_positions(&output, "135");
-        assert!(!positions.is_empty(), "ccon control must be visible");
-        click(&mut app, &ctx, positions[0]);
+        let label = text_positions(&output, "ccon")[0];
+        let position = text_positions(&output, "128")
+            .into_iter()
+            .find(|position| position.x > label.x && (position.y - label.y).abs() < 8.0)
+            .expect("neutral ccon control must be visible on the ccon row");
+        click(&mut app, &ctx, position);
         frame(&mut app, &ctx, vec![]);
         frame(&mut app, &ctx, vec![egui::Event::Text("6".into())]);
         frame(&mut app, &ctx, vec![egui::Event::Text("4".into())]);
@@ -1294,14 +1308,14 @@ mod tests {
         let output = frame(&mut app, &ctx, vec![]);
         drag(&mut app, &ctx, selected_curve_point(&output), 24.0);
         let first = app.project.clone();
-        assert_ne!(first.current, Gamma::dc162());
+        assert_ne!(first.current, Gamma::identity());
         let output = frame(&mut app, &ctx, vec![]);
         drag(&mut app, &ctx, selected_curve_point(&output), -12.0);
         assert_ne!(app.project, first);
         app.history.undo(&mut app.project);
         assert_eq!(app.project, first);
         app.history.undo(&mut app.project);
-        assert_eq!(app.project.current, Gamma::dc162());
+        assert_eq!(app.project.current, Gamma::identity());
         assert!(!app.history.can_undo());
     }
     #[test]
@@ -1317,7 +1331,7 @@ mod tests {
         frame(&mut app, &ctx, vec![egui::Event::Text("3".into())]);
         assert!((app.exponents[2] - 1.23).abs() < 0.001);
         app.history.undo(&mut app.project);
-        assert_eq!(app.project.current, Gamma::dc162());
+        assert_eq!(app.project.current, Gamma::identity());
     }
     #[test]
     fn switching_numeric_cells_creates_separate_undo_transactions() {
@@ -1342,7 +1356,7 @@ mod tests {
             (18, 8)
         );
         app.history.undo(&mut app.project);
-        assert_eq!(app.project.current, Gamma::dc162());
+        assert_eq!(app.project.current, Gamma::identity());
     }
     #[test]
     fn keyboard_shortcuts_distinguish_undo_redo_and_save_as() {

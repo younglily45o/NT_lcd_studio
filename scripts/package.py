@@ -25,6 +25,9 @@ for name in ["dc162.json", "linear.json", "blue-lift.json", "dc162-gamma.h", "co
 (out / "usb/USBCDC").write_bytes(b"")
 (out / "docs").mkdir()
 shutil.copyfile(root / "docs/usb-protocol.md", out / "docs/usb-protocol.md")
+(out / "firmware").mkdir()
+for name in ["lcs_protocol.h", "lcs_protocol.c", "README.md"]:
+    shutil.copyfile(root / "firmware" / name, out / "firmware" / name)
 checksums = []
 for file in sorted(out.rglob("*")):
     if file.is_file():

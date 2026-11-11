@@ -1,9 +1,6 @@
 //! Developer probe for the pseudoterminal C peer. Real USB use goes through
 //! usb_device::open_port, including DTR/RTS; pseudoterminals do not support them.
-use lcd_studio::{
-    ColorControl, DeviceSettings, Gamma,
-    usb_protocol::{DeviceModel, Session},
-};
+use lcd_studio::{ColorControl, DeviceSettings, Gamma, usb_protocol::Session};
 use std::{
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
@@ -11,8 +8,13 @@ use std::{
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
-    let path = args.get(1).ok_or("usage: usb_probe <pty> [mismatch]")?;
-    let expected = DeviceModel::P618V9;
+    let path = args
+        .get(1)
+        .ok_or("usage: usb_probe <pty> [expected-model] [mismatch]")?;
+    let expected = args
+        .iter()
+        .skip(2)
+        .find(|value| value.as_str() != "mismatch");
     let port = serialport::new(path, 115_200)
         .timeout(Duration::from_millis(50))
         .open()?;
@@ -22,7 +24,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Duration::from_secs(2),
         Arc::new(AtomicBool::new(false)),
     );
-    if session.hello()? != expected {
+    let identified = session.hello()?;
+    if expected.is_some_and(|name| identified.name() != name) {
         return Err("C peer model does not match the requested profile".into());
     }
     let initial = session.read_settings()?;
@@ -44,13 +47,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..ColorControl::neutral()
     };
     let result = session.apply_settings(&target);
-    if args.get(2).is_some_and(|s| s == "mismatch") {
+    if args.iter().skip(2).any(|s| s == "mismatch") {
         if !result.is_err_and(|e| e.contains("READBACK")) {
             return Err("C peer mismatch was not rejected".into());
         }
         println!(
             "{} Rust/C PTY: mismatching hardware readback correctly rejected",
-            expected.name()
+            identified.name()
         );
     } else {
         if result? != target {
@@ -61,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         println!(
             "{} Rust/C PTY: hello/get/stage/apply/get succeeded; blue[16]=64, CC=-20/12/140/150",
-            expected.name()
+            identified.name()
         );
     }
     Ok(())

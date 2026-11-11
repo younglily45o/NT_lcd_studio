@@ -1,8 +1,16 @@
-# P618 V9 LCD Studio USB 协议 2
+# LCD Studio 通用 USB 协议 2
 
-配套固件为 V9 `20261110.003`。先将 `usb/USBCDC` 空文件放到存储卡根目录，开机后重插 USB，选择 CDC 虚拟串口（0603:8613、115200/8N1、DTR/RTS）。协议 1 和其它机型不受支持。
+目标设备通过 USB CDC 提供调屏命令，传输约定为 115200/8N1、DTR/RTS。VID/PID 不作为连接白名单；USB 模式进入方式由目标固件决定。电脑端支持任何上报合法机型标识且实现本协议的设备，协议 1 和未知版本仍拒绝。
 
-PC 命令为 `key lcdiq <8hexseq> <op> [data]\r\n`，一行最多 96 字节。回复均为 `@LCS2 <8hexseq> ...`；普通固件日志及旧序号回复被忽略。`hello` 必须回复 `hello P618_V9 2`。
+PC 命令为 `key lcdiq <8hexseq> <op> [data]\r\n`，一行最多 96 字节。回复均为 `@LCS2 <8hexseq> ...`；普通固件日志及旧序号回复被忽略。握手必须回复 `hello <model> 2`，model 为1~32字节ASCII字母、数字、下划线、连字符或点；没有机型枚举白名单。
+
+```text
+@LCS2 10203040 hello DC162 2
+@LCS2 10203040 hello P618_V9 2
+@LCS2 10203040 hello FUTURE-BOARD.1 2
+```
+
+以上是不同设备各自的回复示例，一次握手只回复其中一条。机型标识用于显示和方案来源，不能用来推断硬件寄存器或代替版本校验。固件可复用 [便携 C 核心](../firmware/README.md)。
 
 `get` 依序回复：
 

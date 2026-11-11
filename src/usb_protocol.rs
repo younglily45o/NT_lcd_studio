@@ -9,15 +9,28 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeviceModel {
-    P618V9,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceInfo {
+    model: String,
 }
-impl DeviceModel {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::P618V9 => "P618 V9",
+impl DeviceInfo {
+    pub fn protocol_v2(model: impl Into<String>) -> Result<Self, String> {
+        let model = model.into();
+        if model.is_empty()
+            || model.len() > 32
+            || !model
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        {
+            return Err("设备协议标识无效：机型需要 1~32 个字母、数字、下划线、连字符或点".into());
         }
+        Ok(Self { model })
+    }
+    pub fn name(&self) -> &str {
+        &self.model
+    }
+    pub fn protocol_version(&self) -> u8 {
+        2
     }
 }
 
@@ -110,7 +123,7 @@ pub struct Session<T> {
     last_command: String,
     received_bytes: usize,
     received_tail: Vec<u8>,
-    identified: Option<DeviceModel>,
+    identified: Option<DeviceInfo>,
     uncertain: bool,
 }
 impl<T: Read + Write> Session<T> {
@@ -187,8 +200,7 @@ impl<T: Read + Write> Session<T> {
                         == Some(sequence)
                     {
                         return Err(
-                            "固件协议版本不兼容：需要 P618 V9 协议 2，请升级 20261110.003 固件"
-                                .into(),
+                            "固件协议版本不兼容：需要实现 LCD Studio 协议 2 的设备固件".into()
                         );
                     }
                     continue;
@@ -235,7 +247,7 @@ impl<T: Read + Write> Session<T> {
             }
         }
     }
-    pub fn hello(&mut self) -> Result<DeviceModel, String> {
+    pub fn hello(&mut self) -> Result<DeviceInfo, String> {
         self.identified = None;
         let sequence = self.sequence();
         let deadline = Instant::now() + self.timeout;
@@ -247,14 +259,14 @@ impl<T: Read + Write> Session<T> {
             .collect::<Vec<_>>()
             .as_slice()
         {
-            ["hello", "P618_V9", "2"] => DeviceModel::P618V9,
+            ["hello", model, "2"] => DeviceInfo::protocol_v2(*model)?,
             _ => {
                 return Err(
-                    "设备身份或协议版本不匹配，需要 P618 V9 LCD Studio 协议 2，请升级 20261110.003 固件".into(),
+                    "设备握手格式或协议版本不匹配，需要 hello <机型标识> 2；请使用目标机型配套的 LCD Studio 协议 2 固件".into(),
                 );
             }
         };
-        self.identified = Some(model);
+        self.identified = Some(model.clone());
         Ok(model)
     }
     fn require_identity(&self) -> Result<(), String> {

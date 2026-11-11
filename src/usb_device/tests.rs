@@ -51,7 +51,7 @@ impl Peer {
         let response = match op {
             "hello" => format!(
                 "@LCS2 {seq} hello {} 2\n",
-                if self.identity { self.model } else { "OTHER" }
+                if self.identity { self.model } else { "" }
             ),
             "get" => format!(
                 "@LCS2 {seq} begin {}\n@LCS2 {seq} r {}\n@LCS2 {seq} g {}\n@LCS2 {seq} b {}\n@LCS2 {seq} cc {}\n@LCS2 {seq} end {:08X}\n",
@@ -243,24 +243,34 @@ fn failed_write_pauses_pending_and_late_automatic_updates_before_ui_poll() {
 }
 
 #[test]
-fn worker_connection_reports_v9_identity_and_actual_full_settings() {
-    let trace = Arc::new(Trace::default());
-    let mut peer = Peer::new(trace.clone());
-    peer.settings.gamma.blue[16] = 71;
-    peer.settings.color = ColorControl {
-        sat_ofs: -20,
-        int_ofs: 12,
-        ycon: 140,
-        ccon: 150,
-        ..ColorControl::neutral()
-    };
-    let expected = peer.settings.clone();
-    let worker = Worker::spawn(move || Ok(peer));
-    let event = wait(&worker, |e| matches!(e, DeviceEvent::Connected(_, _)));
-    assert!(
-        matches!(event, DeviceEvent::Connected(DeviceModel::P618V9, settings) if settings == expected)
-    );
-    assert_eq!(*trace.ops.lock().unwrap(), ["hello", "get"]);
+fn worker_connection_supports_reported_models_and_actual_full_settings() {
+    for identifier in ["P618_V9", "DC162", "UNLISTED-BOARD.1"] {
+        let trace = Arc::new(Trace::default());
+        let mut peer = Peer::new(trace.clone());
+        peer.model = identifier;
+        peer.settings.gamma.blue[16] = 71;
+        peer.settings.color = ColorControl {
+            sat_ofs: -20,
+            int_ofs: 12,
+            ycon: 140,
+            ccon: 150,
+            ..ColorControl::neutral()
+        };
+        let expected = peer.settings.clone();
+        let worker = Worker::spawn(move || Ok(peer));
+        let event = wait(&worker, |e| matches!(e, DeviceEvent::Connected(_, _)));
+        assert!(
+            matches!(event, DeviceEvent::Connected(info, settings) if info.name() == identifier && info.protocol_version() == 2 && settings == expected)
+        );
+        assert_eq!(*trace.ops.lock().unwrap(), ["hello", "get"]);
+        let mut target = expected;
+        target.color.sat_ofs = -30;
+        target.gamma.blue[16] = 76;
+        worker.request(Request::Apply(target.clone())).unwrap();
+        assert!(
+            matches!(wait(&worker, |e| matches!(e,DeviceEvent::Applied(_))),DeviceEvent::Applied(actual) if actual==target)
+        );
+    }
 }
 fn initial() -> DeviceSettings {
     DeviceSettings {

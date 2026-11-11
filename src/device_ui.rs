@@ -2,7 +2,7 @@ use eframe::egui;
 use lcd_studio::{
     DeviceSettings,
     usb_device::{DeviceEvent, PortInfo, Request, Worker, available_ports},
-    usb_protocol::DeviceModel,
+    usb_protocol::DeviceInfo,
 };
 use std::{
     sync::mpsc::{self, Receiver, TryRecvError},
@@ -21,7 +21,7 @@ pub struct DevicePanel {
     ready: bool,
     busy: bool,
     automatic: bool,
-    model: Option<DeviceModel>,
+    model: Option<DeviceInfo>,
     baseline_loaded: bool,
     import_pending: bool,
     original: Option<DeviceSettings>,
@@ -56,20 +56,26 @@ impl DevicePanel {
     pub fn source(&self) -> String {
         format!(
             "{} USB CDC 回读 · {}",
-            self.model.map_or("机器", DeviceModel::name),
+            self.model.as_ref().map_or("机器", DeviceInfo::name),
             self.port
+        )
+    }
+    pub fn project_name(&self) -> String {
+        format!(
+            "{} USB 调屏参数",
+            self.model.as_ref().map_or("设备", DeviceInfo::name)
         )
     }
     fn receive(&mut self, event: DeviceEvent) {
         match event {
             DeviceEvent::Opened => {
-                self.status = "USB 端口已打开，正在验证 P618 V9 调屏协议…".into();
+                self.status = "USB 端口已打开，正在验证 LCD Studio 调屏协议…".into();
             }
             DeviceEvent::Connected(model, gamma) => {
                 self.connecting = false;
                 self.ready = true;
                 self.busy = false;
-                self.model = Some(model);
+                self.model = Some(model.clone());
                 self.baseline_loaded = false;
                 self.import_pending = false;
                 self.original = Some(gamma.clone());
@@ -250,8 +256,8 @@ impl DevicePanel {
                 }
             });
             ui.separator();
-            if let Some(model)=self.model {ui.label(format!("已识别设备：{} · 协议 2",model.name()));}
-            if self.ready&&!self.baseline_loaded {ui.label("P618 V9 请先点击“读取机器参数”并确认载入，再下发调屏；本机 Gamma 和颜色控制将共同作为基准。");}
+            if let Some(model)=&self.model {ui.label(format!("已识别设备：{} · 协议 {}",model.name(),model.protocol_version()));}
+            if self.ready&&!self.baseline_loaded {ui.label("请先点击“读取机器参数”并确认载入，再下发调屏；本机 Gamma 和颜色控制将共同作为基准。");}
             ui.horizontal_wrapped(|ui|{
                 if ui.add_enabled(self.ready&&!self.busy,egui::Button::new("读取机器参数")).on_hover_text("读取后载入编辑器；关闭自动下发，避免旧电脑参数覆盖机器").clicked(){
                     self.stop_automatic();self.read_into_editor=self.request(Request::Read);
@@ -273,8 +279,8 @@ impl DevicePanel {
                 ui.ctx().copy_text(format!("LCD Studio {}\n端口：{description}\n{}",env!("CARGO_PKG_VERSION"),self.status));
             }
             ui.separator();
-            ui.small("准备：先升级 V9 20261110.003 固件，再把包内 usb/USBCDC 空文件放在存储卡根目录，开机后重插 USB 数据线。CDC VID/PID：0603:8613。");
-            ui.small("需要 P618 V9 协议 2 固件。握手失败时请核对固件版本、USB 模式和设备驱动。此工具不自动刷机。");
+            ui.small("准备：让目标设备进入 USB CDC 模式，选择对应 COM 端口。VID/PID 仅供辨认，机型由固件握手上报。");
+            ui.small("支持实现 LCD Studio 协议 2 的设备；请使用目标机型配套固件。USB 模式的进入方式由各机型决定，此工具不自动刷机。");
             ui.small("下发作用于运行时 Gamma 和颜色控制，重启后恢复固件默认值；固化参数使用 C 配置导出流程。");
         });
         self.open = open;
@@ -307,14 +313,18 @@ mod tests {
         }
     }
     #[test]
-    fn p618_connection_retains_editor_and_requires_accepted_device_read() {
+    fn generic_connection_retains_editor_and_requires_accepted_device_read() {
         let mut panel = DevicePanel::default();
-        panel.receive(DeviceEvent::Connected(DeviceModel::P618V9, identity()));
+        panel.receive(DeviceEvent::Connected(
+            DeviceInfo::protocol_v2("UNLISTED-BOARD.1").unwrap(),
+            identity(),
+        ));
         assert!(panel.import.is_none());
-        assert!(panel.source().contains("P618 V9"));
+        assert!(panel.source().contains("UNLISTED-BOARD.1"));
+        assert_eq!(panel.project_name(), "UNLISTED-BOARD.1 USB 调屏参数");
         assert!(
             !panel.can_apply(),
-            "DC162 defaults must not be writable on a new P618 link"
+            "offline values must not be writable on a new device link"
         );
         panel.read_into_editor = true;
         panel.receive(DeviceEvent::Read(identity()));
@@ -326,7 +336,7 @@ mod tests {
         panel.complete_import(false);
         assert!(
             !panel.can_apply(),
-            "cancel must keep the P618 write gate closed"
+            "cancel must keep the device write gate closed"
         );
         panel.read_into_editor = true;
         panel.receive(DeviceEvent::Read(identity()));
@@ -334,7 +344,10 @@ mod tests {
         panel.complete_import(true);
         assert!(panel.can_apply());
         panel.reset_link();
-        panel.receive(DeviceEvent::Connected(DeviceModel::P618V9, identity()));
+        panel.receive(DeviceEvent::Connected(
+            DeviceInfo::protocol_v2("ANOTHER_BOARD").unwrap(),
+            identity(),
+        ));
         panel.complete_import(true);
         assert!(
             !panel.can_apply(),
@@ -350,12 +363,15 @@ mod tests {
             scanned_once: true,
             ..Default::default()
         };
-        panel.receive(DeviceEvent::Connected(DeviceModel::P618V9, identity()));
+        panel.receive(DeviceEvent::Connected(
+            DeviceInfo::protocol_v2("UNLISTED-BOARD.1").unwrap(),
+            identity(),
+        ));
         for error in [false, true] {
             if error {
                 panel.receive(DeviceEvent::Error("模拟回读不一致".into()));
             }
-            for _ in 0..2 {
+            for frame_index in 0..2 {
                 let output = ctx.run(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
@@ -372,6 +388,10 @@ mod tests {
                         )));
                     },
                 );
+                if frame_index > 0 {
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text().contains("UNLISTED-BOARD.1"))));
+                }
                 assert!(
                     ctx.tessellate(output.shapes, output.pixels_per_point)
                         .iter()
@@ -386,7 +406,10 @@ mod tests {
         let current = reference();
         panel.receive(DeviceEvent::Opened);
         assert!(!panel.ready);
-        panel.receive(DeviceEvent::Connected(DeviceModel::P618V9, identity()));
+        panel.receive(DeviceEvent::Connected(
+            DeviceInfo::protocol_v2("P618_V9").unwrap(),
+            identity(),
+        ));
         assert!(panel.ready);
         assert!(panel.import.is_none());
         assert_ne!(panel.readback, Some(current));
@@ -394,7 +417,10 @@ mod tests {
     #[test]
     fn failed_operation_clears_confirmation_and_import_request() {
         let mut panel = DevicePanel::default();
-        panel.receive(DeviceEvent::Connected(DeviceModel::P618V9, identity()));
+        panel.receive(DeviceEvent::Connected(
+            DeviceInfo::protocol_v2("P618_V9").unwrap(),
+            identity(),
+        ));
         panel.read_into_editor = true;
         panel.receive(DeviceEvent::Error("readback mismatch".into()));
         assert!(panel.readback.is_none());
@@ -404,7 +430,10 @@ mod tests {
     #[test]
     fn disconnect_clears_restore_and_automatic_state() {
         let mut panel = DevicePanel::default();
-        panel.receive(DeviceEvent::Connected(DeviceModel::P618V9, identity()));
+        panel.receive(DeviceEvent::Connected(
+            DeviceInfo::protocol_v2("P618_V9").unwrap(),
+            identity(),
+        ));
         panel.automatic = true;
         panel.last_queued = Some(reference());
         panel.reset_link();
@@ -421,7 +450,7 @@ mod tests {
         original.color.ccon = 149;
         let mut panel = DevicePanel::default();
         panel.receive(DeviceEvent::Connected(
-            DeviceModel::P618V9,
+            DeviceInfo::protocol_v2("P618_V9").unwrap(),
             original.clone(),
         ));
         assert_eq!(panel.original, Some(original.clone()));
